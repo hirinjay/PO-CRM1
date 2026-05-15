@@ -82,10 +82,8 @@ const DISC_QS=[
 
 const SAVED_KEY='po_crm_config';
 let state={
-  view:'setup',step:1,
-  url:'',token:'',
-  bases:[],selBase:'',
-  tables:[],selTable:'',
+  view:'setup',
+  url:'',token:'',baseId:'',tableId:'',
   cfg:null,err:'',loading:false,showSchema:false,
   prospects:[],search:'',listLoading:false,
   current:null,form:{},tab:'call',
@@ -93,7 +91,7 @@ let state={
 };
 
 // Persist config to localStorage so they don't re-enter every time
-try{const saved=JSON.parse(localStorage.getItem(SAVED_KEY)||'null');if(saved?.url)Object.assign(state,{url:saved.url,token:saved.token,cfg:saved});}catch(e){}
+try{const saved=JSON.parse(localStorage.getItem(SAVED_KEY)||'null');if(saved?.url)Object.assign(state,{url:saved.url,token:saved.token,baseId:saved.baseId||'',tableId:saved.tableId||'',cfg:saved});}catch(e){}
 
 const R=document.getElementById('root');
 
@@ -102,11 +100,11 @@ function mkNC(url,token){
   const b=url.replace(/\/$/,'');
   const ok=async r=>{if(!r.ok)throw new Error('HTTP '+r.status+' — check your URL and token');return r.json();};
   return{
-    bases:()=>fetch(b+'/api/v3/meta/bases',{headers:h}).then(ok),
-    tables:bid=>fetch(b+'/api/v3/meta/bases/'+bid+'/tables',{headers:h}).then(ok),
-    list:(bid,tid)=>fetch(b+'/api/v3/db/data/noco/'+bid+'/'+tid+'?limit=100&sort=-Id',{headers:h}).then(ok),
-    create:(bid,tid,d)=>fetch(b+'/api/v3/db/data/noco/'+bid+'/'+tid,{method:'POST',headers:h,body:JSON.stringify(d)}).then(ok),
-    update:(bid,tid,id,d)=>fetch(b+'/api/v3/db/data/noco/'+bid+'/'+tid+'/'+id,{method:'PATCH',headers:h,body:JSON.stringify(d)}).then(ok),
+    bases:()=>fetch(b+'/api/v1/meta/bases',{headers:h}).then(ok),
+    tables:bid=>fetch(b+'/api/v1/meta/bases/'+bid+'/tables',{headers:h}).then(ok),
+    list:(bid,tid)=>fetch(b+'/api/v1/db/data/noco/'+bid+'/'+tid+'?limit=100&sort=-Id',{headers:h}).then(ok),
+    create:(bid,tid,d)=>fetch(b+'/api/v1/db/data/noco/'+bid+'/'+tid,{method:'POST',headers:h,body:JSON.stringify(d)}).then(ok),
+    update:(bid,tid,id,d)=>fetch(b+'/api/v1/db/data/noco/'+bid+'/'+tid+'/'+id,{method:'PATCH',headers:h,body:JSON.stringify(d)}).then(ok),
   };
 }
 
@@ -114,27 +112,19 @@ function set(patch){Object.assign(state,patch);render();}
 function setForm(k,v){state.form={...state.form,[k]:v};render();}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-async function step1(){
-  if(!state.url||!state.token){set({err:'Both fields required'});return;}
+async function connect(){
+  if(!state.url||!state.token||!state.baseId||!state.tableId){set({err:'All four fields required'});return;}
   set({loading:true,err:''});
-  try{const r=await mkNC(state.url,state.token).bases();set({bases:r.list||[],step:2});}
-  catch(e){set({err:'Connection failed: '+e.message});}
+  try{
+    const cfg={url:state.url,token:state.token,baseId:state.baseId,tableId:state.tableId};
+    // Test connection by fetching records
+    await mkNC(cfg.url,cfg.token).list(cfg.baseId,cfg.tableId);
+    try{localStorage.setItem(SAVED_KEY,JSON.stringify(cfg));}catch(e){}
+    set({cfg,view:'loading'});
+    await loadList(cfg,'');
+    set({view:'list'});
+  }catch(e){set({err:'Connection failed: '+e.message+' — check your IDs and token'});}
   set({loading:false});
-}
-async function step2(){
-  if(!state.selBase){set({err:'Pick a base'});return;}
-  set({loading:true,err:''});
-  try{const r=await mkNC(state.url,state.token).tables(state.selBase);set({tables:r.list||[],step:3});}
-  catch(e){set({err:'Failed: '+e.message});}
-  set({loading:false});
-}
-async function finish(){
-  if(!state.selTable){set({err:'Pick a table'});return;}
-  const cfg={url:state.url,token:state.token,baseId:state.selBase,tableId:state.selTable};
-  try{localStorage.setItem(SAVED_KEY,JSON.stringify(cfg));}catch(e){}
-  set({cfg,view:'loading'});
-  await loadList(cfg,'');
-  set({view:'list'});
 }
 async function loadList(cfg,q){
   set({listLoading:true});
@@ -184,41 +174,31 @@ function fld(label,key,type,opts,hint,placeholder){
 }
 
 function renderSetup(){
-  let body='';
   const s=state;
-  if(s.step===1){
-    body=`
-      <div class="fld"><label class="lbl">NocoDB URL</label><input id="inp-url" type="text" value="${esc(s.url)}" placeholder="https://nocodb.yourdomain.com" style="width:100%"/></div>
-      <div class="fld"><label class="lbl">API Token</label><input id="inp-token" type="password" value="${esc(s.token)}" placeholder="your xc-token…" style="width:100%"/></div>
-      ${s.err?`<p class="err">${esc(s.err)}</p>`:''}
-      <button id="btn-step1" ${s.loading?'disabled':''}>${s.loading?'Connecting…':'Connect →'}</button>`;
-  }else if(s.step===2){
-    body=`<p style="font-size:13px;color:var(--text2);margin-bottom:10px">Select your base:</p>
-      ${s.bases.map(b=>`<div class="pick-item${s.selBase===b.id?' sel':''}" data-pick-base="${b.id}">${esc(b.title)}</div>`).join('')}
-      ${s.err?`<p class="err">${esc(s.err)}</p>`:''}
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button id="btn-back2">← Back</button>
-        <button id="btn-step2" ${s.loading||!s.selBase?'disabled':''}>${s.loading?'Loading…':'Next →'}</button>
-      </div>`;
-  }else{
-    body=`
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <p style="font-size:13px;color:var(--text2)">Select your table:</p>
-        <button id="btn-toggle-schema" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline">${s.showSchema?'hide schema':'view required schema'}</button>
-      </div>
-      ${s.showSchema?`<div style="background:var(--bg2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px"><p style="font-weight:500;margin-bottom:8px">Create these fields in NocoDB:</p>${SCHEMA.map(([n,t,o])=>`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:0.5px solid var(--border)"><span style="font-weight:500">${n}</span><span style="color:var(--text2);text-align:right;margin-left:8px">${t}${o?' — '+o:''}</span></div>`).join('')}</div>`:''}
-      ${s.tables.map(t=>`<div class="pick-item${s.selTable===t.id?' sel':''}" data-pick-table="${t.id}">${esc(t.title)}</div>`).join('')}
-      ${s.err?`<p class="err">${esc(s.err)}</p>`:''}
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button id="btn-back3">← Back</button>
-        <button id="btn-finish" ${!s.selTable?'disabled':''}>Launch app →</button>
-      </div>`;
-  }
   return `
     <p style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin-bottom:4px">Perpetual Order</p>
     <h1 style="font-size:20px;font-weight:500;margin-bottom:4px">Connect to NocoDB</h1>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:24px;line-height:1.6">Step ${s.step} of 3 — ${s.step===1?'Enter credentials':s.step===2?'Select base':'Select table'}</p>
-    <div style="max-width:440px">${body}</div>`;
+    <p style="font-size:13px;color:var(--text2);margin-bottom:24px;line-height:1.6">Enter your NocoDB details below. You only need to do this once.</p>
+    <div style="max-width:440px">
+      <div class="fld"><label class="lbl">NocoDB URL</label><input id="inp-url" type="text" value="${esc(s.url)}" placeholder="https://nocodb.yourdomain.com" style="width:100%"/></div>
+      <div class="fld"><label class="lbl">API Token</label><input id="inp-token" type="password" value="${esc(s.token)}" placeholder="your xc-token…" style="width:100%"/></div>
+      <div class="fld">
+        <label class="lbl">Base ID</label>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:5px">Find it in your NocoDB URL after <code style="font-size:11px;background:var(--bg2);padding:1px 4px;border-radius:4px">#/</code> when your table is open</p>
+        <input id="inp-baseid" type="text" value="${esc(s.baseId)}" placeholder="e.g. p_abc123xyz" style="width:100%"/>
+      </div>
+      <div class="fld">
+        <label class="lbl">Table ID</label>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:5px">In NocoDB open your table → toolbar → <strong>API Docs</strong> → copy the table ID from any endpoint URL</p>
+        <input id="inp-tableid" type="text" value="${esc(s.tableId)}" placeholder="e.g. md_def456uvw" style="width:100%"/>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <button id="btn-toggle-schema" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline">${s.showSchema?'hide required schema':'view required schema'}</button>
+      </div>
+      ${s.showSchema?`<div style="background:var(--bg2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px"><p style="font-weight:500;margin-bottom:8px">Create these fields in your NocoDB table:</p>${SCHEMA.map(([n,t,o])=>`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:0.5px solid var(--border)"><span style="font-weight:500">${n}</span><span style="color:var(--text2);text-align:right;margin-left:8px">${t}${o?' — '+o:''}</span></div>`).join('')}</div>`:''}
+      ${s.err?`<p class="err">${esc(s.err)}</p>`:''}
+      <button id="btn-connect" ${s.loading?'disabled':''}>${s.loading?'Connecting…':'Connect & save →'}</button>
+    </div>`;
 }
 
 function renderList(){
@@ -351,14 +331,12 @@ function render(){
 
 function attachListeners(){
   const on=(id,ev,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener(ev,fn);};
-  on('btn-step1','click',step1);
-  on('btn-step2','click',step2);
-  on('btn-back2','click',()=>set({step:1,err:''}));
-  on('btn-back3','click',()=>set({step:2,err:''}));
-  on('btn-finish','click',finish);
+  on('btn-connect','click',connect);
   on('btn-toggle-schema','click',()=>set({showSchema:!state.showSchema}));
   on('inp-url','input',e=>set({url:e.target.value}));
   on('inp-token','input',e=>set({token:e.target.value}));
+  on('inp-baseid','input',e=>set({baseId:e.target.value}));
+  on('inp-tableid','input',e=>set({tableId:e.target.value}));
   on('btn-new','click',openNew);
   on('btn-new2','click',openNew);
   on('btn-disconnect','click',disconnect);
@@ -366,8 +344,6 @@ function attachListeners(){
   on('btn-back','click',goList);
   on('btn-save','click',save);
   on('btn-script','click',()=>set({scriptOpen:!state.scriptOpen}));
-  document.querySelectorAll('[data-pick-base]').forEach(el=>el.addEventListener('click',()=>set({selBase:el.dataset.pickBase})));
-  document.querySelectorAll('[data-pick-table]').forEach(el=>el.addEventListener('click',()=>set({selTable:el.dataset.pickTable})));
   document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click',()=>set({tab:el.dataset.tab})));
   document.querySelectorAll('.fld-input').forEach(el=>el.addEventListener('input',e=>setForm(e.target.dataset.key,e.target.value)));
   document.querySelectorAll('[data-open]').forEach(el=>el.addEventListener('click',()=>{
